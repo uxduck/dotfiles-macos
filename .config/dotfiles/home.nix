@@ -57,7 +57,8 @@ in
       # Prefer the normal Apple Silicon Homebrew over any stale /usr/local shim from /etc/paths.
       # ADB for android studio old emulator API level 21
       # We add The pnpm home directory to the PATH so that `pnpm install -g $package` doesn't error
-      PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:$BUN_INSTALL/bin:$HOME/repos/flutter/bin:$HOME/Library/Android/sdk/platform-tools:/Library/Frameworks/GStreamer.framework/Versions/Current/bin:${pnpmHome}:$HOME/.opencode/bin:$HOME/.vite-plus/bin:$PATH";
+      # Orca bundles its CLI in the desktop app.
+      PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:$BUN_INSTALL/bin:$HOME/repos/flutter/bin:$HOME/Library/Android/sdk/platform-tools:/Library/Frameworks/GStreamer.framework/Versions/Current/bin:${pnpmHome}:$HOME/.opencode/bin:$HOME/.vite-plus/bin:/Applications/Orca.app/Contents/Resources/bin:$PATH";
       GOOGLE_JAVA_FORMAT_PATH = "/opt/google-java-format-1.13.0-all-deps.jar";
       # We set the PNPM_HOME to ensure pnpm can install global packages
       PNPM_HOME = pnpmHome;
@@ -262,15 +263,55 @@ in
   fonts.fontconfig.enable = true;
 
   home.activation.setDefaultEditor = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    # Note: public.data (the abstract root data UTI) is intentionally omitted —
-    # Launch Services rejects setting a handler for it with error -50 (paramErr).
-    # Instead, register VSCode for concrete text/code UTIs.
-    run ${pkgs.duti}/bin/duti -s com.microsoft.VSCode public.plain-text all
-    run ${pkgs.duti}/bin/duti -s com.microsoft.VSCode public.source-code all
-    run ${pkgs.duti}/bin/duti -s com.microsoft.VSCode public.shell-script all
-    run ${pkgs.duti}/bin/duti -s com.microsoft.VSCode public.json all
-    run ${pkgs.duti}/bin/duti -s com.microsoft.VSCode public.xml all
-    run ${pkgs.duti}/bin/duti -s com.microsoft.VSCode public.yaml all
+    # Register VSCode as the handler for text/code UTIs.
+    #
+    # Two things Launch Services will not let us do:
+    #   * public.data (the abstract root data UTI) is rejected outright with
+    #     error -50 (paramErr), so only concrete UTIs are listed below.
+    #   * LSSetDefaultRoleHandler has to reach lsd in an Aqua (GUI) session.
+    #     Activating over SSH with nobody logged in at the console means there
+    #     is no such session, so every call fails with -10822
+    #     (kLSServerCommunicationErr) and takes the whole rebuild down with it.
+    #
+    # So: read the current assignments out of the Launch Services preference
+    # file (which works headless), only invoke duti for UTIs that actually need
+    # changing, and downgrade a failure to a warning.
+
+    _lsHandlerFor() {
+      local prefs="$HOME/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
+      [ -r "$prefs" ] || return 0
+      /usr/bin/plutil -convert json -o - "$prefs" 2>/dev/null \
+        | ${pkgs.jq}/bin/jq -r --arg uti "$1" '
+            (.LSHandlers // [])
+            | map(select(.LSHandlerContentType == $uti))
+            | (first // {})
+            | (.LSHandlerRoleAll // .LSHandlerRoleEditor // .LSHandlerRoleViewer // "")
+          ' 2>/dev/null || true
+    }
+
+    _lsSetHandler() {
+      local uti="$1" have
+      have="$(_lsHandlerFor "$uti")"
+      if [ "''${have,,}" = "com.microsoft.vscode" ]; then
+        verboseEcho "Launch Services: $uti already handled by VSCode"
+      elif run ${pkgs.duti}/bin/duti -s com.microsoft.VSCode "$uti" all; then
+        noteEcho "Launch Services: $uti -> VSCode"
+      else
+        warnEcho "Launch Services: could not set VSCode as handler for $uti (no GUI session?), skipping"
+      fi
+    }
+
+    for _uti in \
+      public.plain-text \
+      public.source-code \
+      public.shell-script \
+      public.json \
+      public.xml \
+      public.yaml
+    do
+      _lsSetHandler "$_uti"
+    done
+    unset _uti
   '';
 
   home.packages = with pkgs; [
