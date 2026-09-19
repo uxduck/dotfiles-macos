@@ -95,12 +95,12 @@ in
 
       # Auto-launch tmux over SSH (attach to existing "ssh" session or create one)
       if [[ -n "$SSH_CONNECTION" && -z "$TMUX" && -z "$VSCODE_INJECTION" && -t 0 && -t 1 ]]; then
-        exec tmux new-session -A -s ssh
+        tmux new-session -A -s ssh
       fi
 
       # Auto-launch tmux in VSCode terminal with the current directory
       if [[ "$TERM_PROGRAM" == "vscode" && -z "$TMUX" ]]; then
-        exec tmux new-session -A -s "vscode-''${PWD##*/}" -c "$PWD"
+        tmux new-session -A -s "vscode-''${PWD##*/}" -c "$PWD"
       fi
 
       # umask 077: removes group/other permissions (666-077=600 for files, 777-077=700 for dirs)
