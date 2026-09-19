@@ -98,6 +98,35 @@
           # Tailscale is installed via Homebrew cask (see line 263) for the menu bar app
           # services.tailscale.enable = true;
 
+          # Bring Tailscale up at boot, unattended. The macOS app only connects
+          # once a GUI session exists and duckd is headless, so nothing started
+          # the tunnel after a reboot until someone logged in.
+          #
+          # A LaunchAgent can't do this: launchd only scans ~/Library/LaunchAgents
+          # for GUI sessions, so it never loads for an SSH-only login. A daemon
+          # does run - FileVault holds userspace until the volume unlocks, but
+          # system daemons start immediately after (verified 2026-09-19).
+          #
+          # Calling the CLI also demand-starts the network extension, which took
+          # ~80s to answer on a cold boot. Doing it here absorbs that wait rather
+          # than hanging the first interactive 'tailscale status'.
+          #
+          # Bare 'up' is deliberate: it resumes the prefs already on disk, while
+          # passing ANY flag makes it demand every non-default pref on the command
+          # line. It's idempotent, so KeepAlive retries until it exits 0, then stops.
+          # Absolute path because tailscale comes from the cask, not nixpkgs.
+          launchd.daemons.tailscale-up.serviceConfig = {
+            ProgramArguments = [
+              "/usr/local/bin/tailscale"
+              "up"
+            ];
+            RunAtLoad = true;
+            KeepAlive.SuccessfulExit = false;
+            ThrottleInterval = 30;
+            StandardOutPath = "/var/log/tailscale-up.log";
+            StandardErrorPath = "/var/log/tailscale-up.log";
+          };
+
           # Necessary for using flakes on this system.
           nix.settings.experimental-features = "nix-command flakes";
 
